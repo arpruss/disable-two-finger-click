@@ -17,14 +17,16 @@
 #define OUT_BUFFER_SIZE 4096
 #define IN_BUFFER_SIZE  4096
 
-
+int RightClickZoneEnabled = 0;
+int RightClickZoneWidth = 0;
+int RightClickZoneHeight = 0;
 int disable_twofinger_tap_right_click = 0;
 unsigned twofinger_detect_delay_clocks = CLOCKS_PER_SEC * 50 / 1000;
 unsigned click_detect_delay_clocks = CLOCKS_PER_SEC * 50 / 1000;
 HHOOK miHook;
 unsigned num_fingers = 0;
 clock_t last_click = 0;
-clock_t last_two_finger_time = 0;
+clock_t last_problem_twofinger_time = 0;
 
 unsigned char outBuffer[OUT_BUFFER_SIZE];
 unsigned outBufferHead;
@@ -74,12 +76,30 @@ DWORD WINAPI handleQueue(void* arg) {
     return 0;
 }
 
+DWORD readRegistry(HKEY key, char* path, char* value, DWORD defaultValue) {
+	DWORD dataSize = {0};
+	DWORD out;
+	DWORD length = sizeof(DWORD);
+    LONG result = RegGetValue(
+        key,
+        path, 
+        value,        // Value
+        RRF_RT_DWORD,  // Flags, REG_SZ
+        NULL,              
+        &out,              // Data, empty for now
+        &length);     // Getting the size only 
+	if (ERROR_SUCCESS != result)
+		return defaultValue;
+	else
+		return out;
+}
+
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     static char remapped_down = 0;
     if(nCode == HC_ACTION) {
         if(wParam == WM_RBUTTONDOWN) {
             clock_t t = clock();
-            if ( (num_fingers > 1 || t-last_two_finger_time<=twofinger_detect_delay_clocks) &&
+            if ( (num_fingers > 1 || t-last_problem_twofinger_time<=twofinger_detect_delay_clocks) &&
                  (disable_twofinger_tap_right_click || t-last_click<=click_detect_delay_clocks) ) {
                 pushBuffer(1);
                 SetEvent(queueReady);
@@ -120,6 +140,24 @@ int haveButtonCap(HIDP_BUTTON_CAPS* cap, unsigned usagePage, unsigned usage) {
 	}
 }
 
+long getScaled(unsigned scale, unsigned usagePage, unsigned usage, PHIDP_PREPARSED_DATA preparsed, unsigned char* data, unsigned dataSize) {
+	long x;
+	long res = HidP_GetUsageValue(HidP_Input, usagePage, 0, usage, &x, preparsed, data, dataSize);
+	if (res < 0)
+		return -1;
+	static HIDP_VALUE_CAPS cap[IN_BUFFER_SIZE / sizeof(HIDP_VALUE_CAPS)];
+	SHORT length = sizeof(cap)/sizeof(HIDP_VALUE_CAPS);
+	res = HidP_GetSpecificValueCaps(HidP_Input, usagePage, 0, usage, cap, &length, preparsed);
+	if (res < 0)
+		return -1;
+	if (cap[0].LogicalMax <= cap[0].LogicalMin)
+		return -1;
+	
+	int range = cap[0].LogicalMax-cap[0].LogicalMin;
+	return (scale * (x-cap[0].LogicalMin) + range/2) / range;
+}
+
+
 // https://gist.github.com/luluco250/ac79d72a734295f167851ffdb36d77ee
 LRESULT CALLBACK EventHandler(
     HWND hwnd,
@@ -154,6 +192,18 @@ LRESULT CALLBACK EventHandler(
 					&count, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
 			if (res < 0)
 				return 0;
+			
+			int inRightClickZone = 0;
+			if (RightClickZoneEnabled) {
+				int x,y;
+				x = getScaled(100, 0x01, 0x30, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
+				if (x>=0) {
+					y = getScaled(100, 0x01, 0x31, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
+					if (y>=0) {
+						inRightClickZone = x >= 100-RightClickZoneWidth && y >= 100-RightClickZoneWidth;
+					}
+				} 
+			}
 
 			unsigned long click = 0;
 			if (!disable_twofinger_tap_right_click) {
@@ -174,8 +224,14 @@ LRESULT CALLBACK EventHandler(
 			clock_t t = clock();
 			
 			num_fingers = count;
-			if (num_fingers>=2)
-				last_two_finger_time = t;
+			if (num_fingers>=2) {
+				last_problem_twofinger_time = t;
+			}
+			if (inRightClickZone) {
+				num_fingers = 0;
+				last_problem_twofinger_time = 0;
+			}
+				
 			if (click)
 				last_click = t;
         } return 0;
@@ -223,6 +279,20 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE hPrevInstance,
 {
 	if (!processOptions(lpCmdLine))
 		return 0;
+	
+	RightClickZoneEnabled = readRegistry(HKEY_CURRENT_USER, 
+		"Software\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad",
+		"RightClickZoneEnabled", 0);
+	RightClickZoneHeight = readRegistry(HKEY_LOCAL_MACHINE,
+		"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad",
+		"RightClickZoneHeight", 25);
+	if (RightClickZoneHeight == 0)
+		RightClickZoneHeight = 25;
+	RightClickZoneWidth = readRegistry(HKEY_LOCAL_MACHINE,
+		"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad",
+		"RightClickZoneWidth", 50);
+	if (RightClickZoneWidth == 0)
+		RightClickZoneWidth = 50;
 	
     const char* class_name = "disable-two-finger-click-889239832489-class";
 	
