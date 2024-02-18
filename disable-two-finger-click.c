@@ -10,8 +10,8 @@ NTSTATUS HidP_GetCaps(PHIDP_PREPARSED_DATA preparsed_data, HIDP_CAPS *caps);
 HHOOK miHook;
 
 const char ALLOW_DOUBLE_TAP_RIGHT_CLICK = 1;
-const unsigned TWOFINGER_DETECT_DELAY_CLOCKS = CLOCKS_PER_SEC * 100 / 1000;
-const unsigned CLICK_DETECT_DELAY_CLOCKS = CLOCKS_PER_SEC * 100 / 1000;
+const unsigned TWOFINGER_DETECT_DELAY_CLOCKS = CLOCKS_PER_SEC * 50 / 1000;
+const unsigned CLICK_DETECT_DELAY_CLOCKS = CLOCKS_PER_SEC * 50 / 1000;
 #define OUT_BUFFER_SIZE 4096
 #define MAX_HID  4096
 unsigned num_fingers = 0;
@@ -144,67 +144,34 @@ LRESULT CALLBACK EventHandler(
                 return 0;
 			size = sizeof(preparsedBuffer);
 			res = GetRawInputDeviceInfo(data->header.hDevice, RIDI_PREPARSEDDATA, preparsed, &size);
-			if (res < 0 || size == 0 || HidP_GetCaps(preparsed, &caps) < 0) 
+			if (res < 0 || size == 0) 
+				return 0;
+			unsigned long count;
+			res = HidP_GetUsageValue(HidP_Input, 0x0D, 0, 0x54, 
+					&count, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
+			if (res < 0)
 				return 0;
 
-			unsigned buttonCount = caps.NumberInputButtonCaps;
-			SHORT buttonSize = buttonCount * sizeof(*buttonCaps);
-			if (buttonSize > MAX_HID)
+			unsigned long click;						
+			unsigned long usageLength = sizeof(usageBuffer)/sizeof(USAGE);
+			
+			res = HidP_GetUsages(HidP_Input, 0x0d, 0, usages, &usageLength, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
+			if (res < 0)
 				return 0;
 			
-			if (HidP_GetButtonCaps(HidP_Input, buttonCaps, &buttonSize, preparsed) < 0)
-				return 0;
-			
-			unsigned valueCount = caps.NumberInputValueCaps;
-			SHORT valueSize = valueCount * sizeof(*valueCaps);
-			if (valueSize > MAX_HID)
-				return 0;
-			
-			if (HidP_GetValueCaps(HidP_Input, valueCaps, &valueSize, preparsed) < 0)
-				return 0;
-			
-			int haveCount = 0;
-			int haveClick = 0;
-			unsigned long count;
-			unsigned long click;
-						
-			for (int i=0; i<valueCount; i++) {
-				if (haveValueCap(valueCaps+i, 0x0D, 0x54) &&
-					HIDP_STATUS_SUCCESS==HidP_GetUsageValue(HidP_Input, (USAGE)0x0D, (USHORT)valueCaps[i].LinkCollection, (USAGE)0x54, 
-					(PULONG)&count, preparsed, (PCHAR)data->data.hid.bRawData, (ULONG)data->data.hid.dwSizeHid)) {
-					haveCount = 1;
+			click = 0;
+			for (int j=0;j<usageLength;j++)
+				if (usages[j]==0x01) {
+					click = 1;
 					break;
 				}
-			}
-
-			ULONG usageLength;
-			
-			for (int i=0; i<buttonCount; i++) {
-				if (haveButtonCap(buttonCaps+i, 0x09, 0x01)) {
-					usageLength = sizeof(usageBuffer)/sizeof(USAGE);
-					if (HIDP_STATUS_SUCCESS==HidP_GetUsages(HidP_Input, 0x0d, 
-						(USHORT)buttonCaps[i].LinkCollection, 
-						usages, &usageLength, preparsed, (PCHAR)data->data.hid.bRawData, (ULONG)data->data.hid.dwSizeHid)) {
-						haveClick = 1;
-						click = 0;
-						for (int j=0;j<usageLength;j++)
-							if (usages[j]==0x01) {
-								click = 1;
-								break;
-							}
-						break;
-					}
-				}
-			}
 
 			clock_t t = clock();
 			
-			if (haveCount) {
-				num_fingers = count;
-				if (num_fingers>=2)
-					last_two_finger_time = t;
-			}
-			if(haveClick && click)
+			num_fingers = count;
+			if (num_fingers>=2)
+				last_two_finger_time = t;
+			if (click)
 				last_click = t;
         } return 0;
     }
