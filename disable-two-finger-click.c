@@ -65,9 +65,9 @@ DWORD WINAPI handleQueue(void* arg) {
         int c;
         while (running && (c = popBuffer()) >= 0) {
             if (c) 
-                ip.mi.dwFlags = WM_RBUTTONDOWN;
+                ip.mi.dwFlags = WM_LBUTTONDOWN;
             else
-                ip.mi.dwFlags = WM_RBUTTONUP;
+                ip.mi.dwFlags = WM_LBUTTONUP;
             SendInput(1,&ip,sizeof(INPUT));
         }
     }
@@ -187,53 +187,59 @@ LRESULT CALLBACK EventHandler(
 			res = GetRawInputDeviceInfo(data->header.hDevice, RIDI_PREPARSEDDATA, preparsed, &size);
 			if (res < 0 || size == 0) 
 				return 0;
-			unsigned long count;
-			res = HidP_GetUsageValue(HidP_Input, 0x0D, 0, 0x54, 
-					&count, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
-			if (res < 0)
-				return 0;
 			
-			int inRightClickZone = 0;
-			if (RightClickZoneEnabled) {
-				int x,y;
-				x = getScaled(100, 0x01, 0x30, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
-				if (x>=0) {
-					y = getScaled(100, 0x01, 0x31, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
-					if (y>=0) {
-						inRightClickZone = x >= 100-RightClickZoneWidth && y >= 100-RightClickZoneWidth;
-					}
-				} 
-			}
-
-			unsigned long click = 0;
-			if (!disable_twofinger_tap_right_click) {
-				unsigned long usageLength = sizeof(usageBuffer)/sizeof(USAGE);
-				
-				res = HidP_GetUsages(HidP_Input, 0x09, 0, usages, &usageLength, preparsed, data->data.hid.bRawData, data->data.hid.dwSizeHid);
+			unsigned rawDataSize = data->data.hid.dwSizeHid;
+			
+			for (unsigned i=0; i<data->data.hid.dwCount; i++) {
+				BYTE* rawData = data->data.hid.bRawData + i * rawDataSize;
+				unsigned long count;
+				res = HidP_GetUsageValue(HidP_Input, 0x0D, 0, 0x54, 
+						&count, preparsed, rawData, data->data.hid.dwSizeHid);
 				if (res < 0)
-					return 0;
+					continue;
 				
-				for (int j=0;j<usageLength;j++) {
-					if (usages[j]==0x01) {
-						click = 1;
-						break;
+				int inRightClickZone = 0;
+				if (RightClickZoneEnabled) {
+					int x,y;
+					x = getScaled(100, 0x01, 0x30, preparsed, rawData, rawDataSize);
+					if (x>=0) {
+						y = getScaled(100, 0x01, 0x31, preparsed, rawData, rawDataSize);
+						if (y>=0) {
+							inRightClickZone = x >= 100-RightClickZoneWidth && y >= 100-RightClickZoneWidth;
+						}
+					} 
+				}
+
+				unsigned long click = 0;
+				if (!disable_twofinger_tap_right_click) {
+					unsigned long usageLength = sizeof(usageBuffer)/sizeof(USAGE);
+					
+					res = HidP_GetUsages(HidP_Input, 0x09, 0, usages, &usageLength, preparsed, rawData, rawDataSize);
+					if (res < 0)
+						continue;
+					
+					for (int j=0;j<usageLength;j++) {
+						if (usages[j]==0x01) {
+							click = 1;
+							break;
+						}
 					}
 				}
-			}
 
-			clock_t t = clock();
-			
-			num_fingers = count;
-			if (num_fingers>=2) {
-				last_problem_twofinger_time = t;
-			}
-			if (inRightClickZone) {
-				num_fingers = 0;
-				last_problem_twofinger_time = 0;
-			}
+				clock_t t = clock();
 				
-			if (click)
-				last_click = t;
+				num_fingers = count;
+				if (num_fingers>=2) {
+					last_problem_twofinger_time = t;
+				}
+				if (inRightClickZone) {
+					num_fingers = 0;
+					last_problem_twofinger_time = 0;
+				}
+					
+				if (click)
+					last_click = t;
+			}
         } return 0;
     }
 
