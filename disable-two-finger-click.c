@@ -61,13 +61,13 @@ DWORD WINAPI handleQueue(void* arg) {
     ip.mi.time = 0;
     
     while(running) {
-        WaitForSingleObject(queueReady, INFINITE);
+        WaitForSingleObject(queueReady, INFINITE);//INFINITE
         int c;
         while (running && (c = popBuffer()) >= 0) {
             if (c) 
-                ip.mi.dwFlags = WM_LBUTTONDOWN;
+                ip.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
             else
-                ip.mi.dwFlags = WM_LBUTTONUP;
+                ip.mi.dwFlags = MOUSEEVENTF_LEFTUP;
             SendInput(1,&ip,sizeof(INPUT));
         }
     }
